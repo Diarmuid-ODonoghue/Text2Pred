@@ -18,27 +18,25 @@ from pycorenlp import StanfordCoreNLP
 
 java_path = "C:\Program Files\Java\jdk1.8.0_171\bin\java.exe"
 os.environ['JAVAHOME'] = java_path
+# base_path = "C:/Users/dodonoghue/Documents/Python-Me/data/"
+nlp = StanfordCoreNLP("http://localhost:9000")
 
-basePath = "C:/Users/dodonoghue/Documents/Python-Me/data/"
-#localBranch = "iProva Texts 2/"# "test/"  #"iProvaData/"
+base_path = dir_path = os.path.dirname(os.path.realpath(__file__)).replace('\\', '/')
+local_path = base_path.replace("Cre8Blend", "data", 1)
 #localBranch = "test/"# "test/"  #"iProvaData/"
 #localBranch = "Covid-19/"
-#localBranch = "iProva/"
 #localBranch = "MisTranslation data/"
-localBranch = "Psychology data/"
+localBranch = "/Psychology data/"
 #localBranch = "Covid-19 Publications Feb 21/covid_text/"
 # localBranch = "Sheffield-Plagiarism-Corpus/"
 #localBranch = "Killians Summaries/"
 #localBranch = "20 SIGGRAPH Abstracts - Stanford/"
+#in_path = localPath + "SIGGRAPH Abstracts/" # "
+#in_path = localPath + "psych texts/"
+in_path = local_path + localBranch  # "test/"
+out_path = local_path + localBranch
 
-#inPath = localPath + "SIGGRAPH Abstracts/" # "
-#inPath = localPath + "psych texts/"
-localPath = basePath  # localPath + inPath
-#inPath = localPath + "psych data/"
-inPath = localPath + localBranch  # "test/"
-outPath = localPath + localBranch  
 
-nlp = StanfordCoreNLP("http://localhost:9000")
 ###import stanza
 ###from stanza.server import CoreNLPClient
 ###stanza.download('en')
@@ -49,15 +47,19 @@ global document_triples
 global sentence_triples
 global sentence_triplesPP 
 global set_of_raw_concepts
+global sentence_number
+global skip_over_previous_results
+
+skip_over_previous_results = False # True # dont regenerate existing outputs
 
 data = []
 document_triples = []
 sentence_triples = []
 sentence_triplesPP = []
 fullDocument = ""
+sentence_number = 0
 
-global skip_over_previous_results
-skip_over_previous_results = False # True # True
+
 
 concept_tags = {'NN', 'NNS', 'PRP', 'PRP$'}  # NNP, NNPS
 relation_tags = {'VB'}
@@ -79,26 +81,16 @@ def processDocument(text): # full document
     global sentence_triplesPP
     global set_of_raw_concepts
     list_of_sentences = sent_tokenize(text)
-##    with CoreNLPClient(
-##       annotators=['tokenize','ssplit','pos','lemma','ner', 'parse', 'depparse','coref'], timeout=30000, #milliseconds
-##        memory='16G') as client:
-##    ann = client.annotate(text)
     sents = sent_tokenize(text)
     output = nlp.annotate(text, properties={
+        'annotators': 'tokenize, ssplit, parse, ner, dcoref', 'outputFormat': 'json'})
     #    'annotators': 'tokenize, ssplit, parse, coref', 'outputFormat': 'json'  })
     #output = nlp.annotate(text, properties={
-        'annotators': 'tokenize, ssplit, parse, ner, dcoref',
-        'outputFormat': 'json'})
-    #output = nlp.annotate(text, properties={
     #     'annotators': 'tokenize, ssplit, parse, ner, coref',  # NEURAL coref
-    #     'coref.algorithm': 'neural',
-    #     'outputFormat': 'json'  })
+    #     'coref.algorithm': 'neural', 'outputFormat': 'json'  })
     #output = nlp.annotate(text, properties={
     #     'annotators': 'tokenize, ssplit, pos, nerparse, lemma, nerparse, coref',  # NEURAL coref
-    #     'coref.algorithm': 'neural',
-    #     'outputFormat': 'json'  })
-    #eg {'word': 'is', 'characterOffsetEnd': 1163, 'ner': 'O', 'after': ' ', 'lemma': 'be',
-    # 'characterOffsetBegin': 1161, 'pos': 'VBZ', 'index': 9, 'originalText': 'is', #'before': ' ', 'speaker': 'PER0'},
+    #     'coref.algorithm': 'neural', 'outputFormat': 'json'  })
     if output == "CoreNLP request timed out. Your document may be too long.":
         print("** Timeout of the Stanford Parser")
         list_of_sentences = []  # No parsed output to process
@@ -287,8 +279,8 @@ def processDocument(text): # full document
                 for x in child:
                     if checkLabel(tree, PositionInTree(x, Positions_depths)) == "PP":
                         NextStep = False
-                    else:
-                        print("CheckLabel is False")
+                    #else:
+                    #    print("CheckLabel = False", end="")
 
                 if NextStep:
                     Preposition = child[0]
@@ -752,7 +744,7 @@ def generate_output_CSV_file(fileName):
     global document_triples
     testList = BringListDown1D(document_triples)
     heading = [["NOUN", "VERB/PREP", "NOUN"]]
-    with open(outPath + fileName+".dcorf.csv", 'w', encoding="utf8") as resultFile:
+    with open(out_path + fileName+".dcorf.csv", 'w', encoding="utf8") as resultFile:
         write = csv.writer(resultFile, lineterminator='\n')
         write.writerows(heading)
         write.writerows(testList)
@@ -761,12 +753,12 @@ def generate_output_CSV_file(fileName):
 
 
 def processAllTextFiles():
-    global inPath
+    global in_path
     global document_triples
     global sentence_number
     global set_of_raw_concepts
     global skip_over_previous_results
-    fileList = os.listdir(inPath)
+    fileList = os.listdir(in_path)
     txt_files = [i for i in fileList if i.endswith('.txt')]
     #txt_files = [i for i in txt_files if i.startswith('TEMP')]
     if 'Cache.txt' in txt_files:
@@ -776,15 +768,15 @@ def processAllTextFiles():
         set_of_raw_concepts = set()
         sentence_number = 0
         print("\n####################################################")
-        print("FILE ", inPath, "&&", fileName)
-        if skip_over_previous_results and path.isfile(inPath + fileName + ".dcorf.csv"):
+        print("FILE ", in_path, "&&", fileName)
+        if skip_over_previous_results and path.isfile(in_path + fileName + ".dcorf.csv"):
             print(" £skippy ", end="")
             continue
         global data
         data = []
         document_triples = []
         try:
-            file = open(inPath+fileName, "r", encoding="utf8", errors='replace')
+            file = open(in_path+fileName, "r", encoding="utf8", errors='replace')
         except Exception as err:
              print("Erro {}".format(err))
         full_document = file.read()
@@ -822,7 +814,7 @@ def processAllTextFiles():
 def add_line_to_output_CSV_file(fileName):
     global document_triples
     testList = BringListDown1D(document_triples)
-    with open(outPath + fileName+".dcorf.csv", 'w', encoding="utf8") as resultFile:
+    with open(out_path + fileName+".dcorf.csv", 'w', encoding="utf8") as resultFile:
         write = csv.writer(resultFile, lineterminator='\n')
         write.writerows(heading)
         write.writerows(testList)
@@ -853,7 +845,12 @@ def count_content_overlap(string_a, string_b):
             filtered_sentence.append(w) """
 
 
-print("Type   processAllTextFiles()   to generate graphs from ", inPath)
+print("1) Set your java path in line 19.")
+print("2) Change the base_path variable if it is Not the current working directory.", base_path)
+print("Type   processAllTextFiles()   to generate graphs from .txt files from ", in_path)
+
+#processDocument("John drove his new car but he crashed it.")
+
 processAllTextFiles()
 
 import nltk
