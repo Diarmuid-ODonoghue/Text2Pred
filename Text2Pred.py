@@ -9,12 +9,16 @@ import pprint
 import re
 import json
 import sys
+import nltk
 
 from nltk.tokenize import sent_tokenize
 from nltk.tree import *
 from functions import *
 #import nltk
 from pycorenlp import StanfordCoreNLP
+
+from datasets import load_dataset
+# dataset = load_dataset("docred")
 
 java_path = "C:\Program Files\Java\jdk1.8.0_171\bin\java.exe"
 os.environ['JAVAHOME'] = java_path
@@ -23,14 +27,15 @@ nlp = StanfordCoreNLP("http://localhost:9000")
 
 base_path = dir_path = os.path.dirname(os.path.realpath(__file__)).replace('\\', '/')
 local_path = base_path.replace("Cre8Blend", "data", 1)
-#localBranch = "test/"# "test/"  #"iProvaData/"
-#localBranch = "Covid-19/"
-#localBranch = "MisTranslation data/"
+localBranch = "/test/"# "test/"  #"iProvaData/"
+#localBranch = "/Covid-19 on Feb 21/"  # Covid-19 on Feb 21
+# localBranch = "MisTranslation data/"
 localBranch = "/Psychology data/"
+# localBranch = "/Aesops Fables/"
 #localBranch = "Covid-19 Publications Feb 21/covid_text/"
-# localBranch = "Sheffield-Plagiarism-Corpus/"
+# localBranch = "/Sheffield-Plagiarism-Corpus/"
 #localBranch = "Killians Summaries/"
-#localBranch = "20 SIGGRAPH Abstracts - Stanford/"
+#localBranch = "/20 SIGGRAPH Abstracts - Stanford/"
 #in_path = localPath + "SIGGRAPH Abstracts/" # "
 #in_path = localPath + "psych texts/"
 in_path = local_path + localBranch  # "test/"
@@ -61,8 +66,8 @@ sentence_number = 0
 
 
 
-concept_tags = {'NN', 'NNS', 'PRP', 'PRP$'}  # NNP, NNPS
-relation_tags = {'VB'}
+concept_tags = {'NN', 'NNS', 'PRP', 'PRP$', 'NNP', 'NNPS'}  # NNP, NNPS
+relation_tags = {'VB', 'VBG', 'VBG', 'VBN', 'VBP', 'VBZ', 'VBD'}
 illegal_concept_nodes = {"-RRB-", "-LRB-", "-RSB-" "-LSB-" "Unknown", "UNKNOWN", ",", ".", "?", "'s", "'", "''"}
 
 def trim_concept_chain(text): # very long chains only, phrases
@@ -72,7 +77,7 @@ def trim_concept_chain(text): # very long chains only, phrases
     tagged = nltk.pos_tag(str)
     ret = '_'.join([word for word, tag in tagged[:-1] if tag in concept_tags] + [tagged[-1][0]])
     return ret
-#trim_concept_chain('cloth_captured_from_a_flapping_flag_it')
+# trim_concept_chain('cloth_captured_John_Americans_from_a_flapping_flag_it')
 
 
 def processDocument(text): # full document
@@ -83,13 +88,13 @@ def processDocument(text): # full document
     list_of_sentences = sent_tokenize(text)
     sents = sent_tokenize(text)
     output = nlp.annotate(text, properties={
-        'annotators': 'tokenize, ssplit, parse, ner, dcoref', 'outputFormat': 'json'})
+                  'annotators': 'tokenize, ssplit, parse, ner, dcoref', 'outputFormat': 'json'})
     #    'annotators': 'tokenize, ssplit, parse, coref', 'outputFormat': 'json'  })
     #output = nlp.annotate(text, properties={
     #     'annotators': 'tokenize, ssplit, parse, ner, coref',  # NEURAL coref
     #     'coref.algorithm': 'neural', 'outputFormat': 'json'  })
     #output = nlp.annotate(text, properties={
-    #     'annotators': 'tokenize, ssplit, pos, nerparse, lemma, nerparse, coref',  # NEURAL coref
+    #     'annotators': 'tokenize, ssplit, pos, nerparse, lemma, coref',
     #     'coref.algorithm': 'neural', 'outputFormat': 'json'  })
     if output == "CoreNLP request timed out. Your document may be too long.":
         print("** Timeout of the Stanford Parser")
@@ -108,12 +113,25 @@ def processDocument(text): # full document
     else:
         print("** Stanford Parser Error - type:", type(output), end="")
 
-    for i in range(len(list_of_sentences)):   # for each sentence #
-        sentence_triples = []      #####################
+    # record multi-word NERs for each sentence, incorporate in subject and object as appropriate.
+    ner_dict = {}
+    print("NER: ", end="")
+    for coref_chain in output['corefs']:
+        if output['corefs'][coref_chain][0]['type'] == 'PROPER' and ' ' in output['corefs'][coref_chain][0]['text']:
+            if output['corefs'][coref_chain][0]['sentNum'] -1 in ner_dict.keys():
+                ner_dict[output['corefs'][coref_chain][0]['sentNum'] -1].append(output['corefs'][coref_chain][0]['text'])
+            else:
+                ner_dict[output['corefs'][coref_chain][0]['sentNum'] -1] \
+                    = [output['corefs'][coref_chain][0]['text']]
+
+    for i in range(len(list_of_sentences)):
+        sentence_triples = []
         sentence_triplesPP = []
         sentence_number += 1
-        if sents[i][0:14] == "CR Categories:":    # skip keyword list.
-            break
+        if i in ner_dict.keys():
+            sentence_ners = ner_dict[i]
+        else:
+            sentence_ners = []
         try:
             sent1 = output['sentences'][i]['parse']
         except IndexError:
@@ -129,8 +147,6 @@ def processDocument(text): # full document
         Positions = getListPos(tree)
         Positions_depths = getOrderPos(Positions)
         Positions_leaves = getLeafPos(tree)
-        # find the children of S
-        # TODO implement new set of rule
         # locate all VP's in the sentence.
         posOfVP = findPosOfSpecificLabel(tree, "VP", Positions_depths, Positions_leaves)
 
@@ -138,56 +154,60 @@ def processDocument(text): # full document
         ######  VP  ########
         ####################
         if posOfVP != None:
-            for z in posOfVP:   # iterative over VP's
+            for z in posOfVP:   # iterate over VP's
                 Triple = []
-                Verb = ""
-                NextStep = True
+                Verb = "Unknown"
+                NextStep, found_relation = True, False
 
                 PosInTree = PositionInTree(z, Positions_depths)
                 child = findChildNodes(PosInTree, z, Positions_depths)
                 for x in child:
+                    pos_tag = checkLabel(tree, PositionInTree(x, Positions_depths))
                     if checkLabel(tree, PositionInTree(x, Positions_depths)) == "VP": # VBD?
                         NextStep = False
+                    elif pos_tag in relation_tags:  # choose the Last Verb in VP as the Head verb
+                        Verb = x
+                        found_relation = True
                         # break? out and stop working with this VP
                 # If next step still equals true then there is no VP child of the current VP and
-                # we can procede to the next step.
+                # we can proceed to the next step.
                 if NextStep:
-                    VerbTree = child[0]
-                    Verb = child[0]
+                    if not found_relation:
+                        Verb = child[0]
                     Verb = findLeavesFromNode(PositionInTree(Verb, Positions_depths), Positions_leaves)
                     Verb = checkLabelLeaf(tree, Verb)
-                    Subject = "Unknown"
 
+                    if Verb == "dispatched":
+                        dud = 0
+
+                    Subject = "Unknown"    # ###################################################################
                     LeftSibling = findLeftSiblingCurrentLevel(z, Positions_depths)
                     LeftSiblingPos = PositionInTree(LeftSibling, Positions_depths)
-                    # print(checkLabel(tree, LeftSiblingPos))
                     RunCheck = True
                     try:
-                        LeftSiblingLabel = checkLabel(tree, LeftSiblingPos) # Try left-sibling
+                        LeftSiblingLabel = checkLabel(tree, LeftSiblingPos)  # Try left-sibling
                     except:
-                        RunCheck = False # No left-sibling
-
+                        RunCheck = False    # No left-sibling
                     if RunCheck and LeftSiblingLabel == "NP":
                         leaves = findLeavesFromNode(LeftSiblingPos, Positions_leaves)
-                        #print(leaves)
-                        Subject = leaves[len(leaves) - 1]
-                        #print(Subject)
-                        Subject = checkLabelLeaf(tree, Subject)
-                        #print(Subject)
+                        for nod in leaves:
+                            Subject = leaves[len(leaves) - 1] # leaves[0]
+                            tmp = nod[0:len(leaves[0]) - 1]
+                            # tmp = leaves[0][0:len(leaves[0]) - 1]  # dod  22 Sept 15
+                            tmp2 = checkLabelLeaf(tree, tmp) # test for , and and other odd labels
+                            if isinstance(tmp2, str) and tmp2 != "," and "(" in tmp2 \
+                                    and tmp2.label() in concept_tags: # NN, NNP, NNS, ...
+                                Subject = checkLabelLeaf(tree, Subject)
                     else:
                         # If left sibling isnt a NP then check parent and its NP, repeat until you find NP.
-                        CurrentVP = z  # this will change later to x or something when I loop
-                                       # through all of the VP's
-                        cont = True
-                        counter = 0
+                        CurrentVP = z  # will change to x or something when I loop through all VP's
+                        cont, counter = True, 0
                         while cont == True and counter<10:
-                            counter+=1
-                            # get parent of this VP
+                            counter+=1               # get parent of this VP
                             Parent = findParentNode(PositionInTree(CurrentVP, Positions_depths), Positions_depths)
 
                             # now that we have parent, check its leftsibling
                             ParentLeftSibling = findLeftSiblingCurrentLevel(Parent, Positions_depths)
-                            # print(ParentLeftSibling)
                             # now check the label of the parents left sibling, if it is an NP then use the above code, if it is node then repeat the process
                             ParentLeftSiblingPOS = PositionInTree(ParentLeftSibling, Positions_depths)
                             RunCheck = True
@@ -206,20 +226,23 @@ def processDocument(text): # full document
                                 CurrentVP = Parent
 
                     # now that I have the subject and Verb I should combine these together and create a double.
-                    #if Subject.count("_")>=2:
-                    #    #print(Subject,"->", end="")
-                    #    Subject = trim_concept_chain(Subject)
-                    #    #print(Subject,"   ", end="")
+                    for ner_n in sentence_ners:
+                        if isinstance(Subject, str) and Subject in ner_n:  # always a 1-word subject?
+                            #print(Subject, "->", ner_n, end="  ")
+                            Subject = ner_n.replace(" ", "_")
+                            break
+                    if isinstance(Subject, tuple):
+                        Subject = "Unknown"
                     Triple.append(Subject)
                     Triple.append(Verb)
 
                     # now locate the OBJECT - if there is one.
-                    Obj = "Unknown-Obj "
+                    Obj = "Unknown"  # ###########################################################################
                     # reuse some of the code from previous rule to find closest NP on the right of the verb.
                     ListOfNP = findPosOfSpecificLabel(tree, "NP", Positions_depths, Positions_leaves)
                     PosOfVerbTree = Positions.index(Positions_depths[child[0][0]][child[0][1]])
                     index = []
-                    if ListOfNP:              #dod
+                    if ListOfNP:
                         for x in ListOfNP:
                             index.append(Positions.index(Positions_depths[x[0]][x[1]]))
 
@@ -227,7 +250,7 @@ def processDocument(text): # full document
                     currentDif = 100000
                     for y in index:
                         diff = y - PosOfVerbTree
-                        if (diff > 0 and diff < currentDif):
+                        if (diff > 0 and diff < currentDif): # nearest NP to the right
                             currentDif = diff
                             closest = y
 
@@ -249,94 +272,94 @@ def processDocument(text): # full document
                         else:
                             leaves = findLeavesFromNode(currentNodePOS, Positions_leaves)
                             Obj = checkLabelLeaf(tree, leaves[len(leaves)-1])
+                            if Obj == "." and len(leaves)>=2: # or its not an NN
+                                Obj = checkLabelLeaf(tree, leaves[len(leaves) - 2])
                             loop = False
                             break
+                    if isinstance(Obj, tuple):
+                            Subject = "Unknown"
+                    if Obj != ".":
+                        for ner_n in sentence_ners:
+                            if Obj in ner_n:
+                                # print(Obj, "->", ner_n, end="   ")
+                                Obj = ner_n.replace(" ", "_")
+                                break
 
-                    if Obj!= ".":
-                        #if Obj.count("_") >= 2:         # trim coreference Phrases
-                        #    Obj = trim_concept_chain(Obj)
                         Triple.append(Obj)
                         sentence_triples.append(Triple)  # end PosOfVP for loop
 
         ####################
         ######  PP  ########
         ####################
-
         PosOfPP = findPosOfSpecificLabel(tree, "PP", Positions_depths, Positions_leaves)
 
-        # global sentence_triplesPP
-        # sentence_triplesPP = []
-        if PosOfPP is None:
-                print("No PP found")
-        else: 
+        if PosOfPP != None:
             for z in PosOfPP:
                 Triple = []
-                Preposition = ""
+                Preposition = "Unknown"
                 NextStep = True
 
                 PosInTree = PositionInTree(z, Positions_depths)
                 child = findChildNodes(PosInTree, z, Positions_depths)
                 for x in child:
-                    if checkLabel(tree, PositionInTree(x, Positions_depths)) == "PP":
+                    if checkLabel(tree, PositionInTree(x, Positions_depths)) == "PP": # PP is parent of PP
                         NextStep = False
-                    #else:
-                    #    print("CheckLabel = False", end="")
-
                 if NextStep:
                     Preposition = child[0]
                     Preposition = findLeavesFromNode(PositionInTree(Preposition, Positions_depths), Positions_leaves)
-
                     if type(Preposition) == list:
-                        if len(Preposition[0]) >1 :           ## ERROR from here
+                        if len(Preposition[0]) >1 :           ## ERROR from here, need an else?
                             Preposition = [Preposition[0]]
+                    Preposition = checkLabelLeaf(tree, Preposition)
 
-                    Preposition = checkLabelLeaf(tree, Preposition) 
-
-                    # find NP on the left
+                    # find SUBJECT NP on the left
                     PosPPTree = Positions.index(Positions_depths[child[0][0]][child[0][1]])
                     closest = 0
                     currentDif = -1000000
 
                     """if isinstance(index, int):  # ulgy hack
-                        index = [index]
-                        #print("is int")   """
-
+                        index = [index] """
                     try:
                         index
                     except NameError:  # no Verb
                         index = []
 
-                    for y in index:   # position of V
+                    for y in index:   # position of Prp$
                         diff = y - PosPPTree
-                        if (diff < 0 and diff > currentDif):
+                        if (diff < 0 and diff > currentDif): # left NP
                             currentDif = diff
                             closest = y
                     # now that you have closest NP get the children
                     leaves = findLeavesFromNode(Positions[closest], Positions_leaves)
                     # add the right most leaf to the triple
-                    leafLabel = checkLabelLeaf(tree, leaves[len(leaves) - 1])
-                    Triple.append(leafLabel)
+                    subject = checkLabelLeaf(tree, leaves[len(leaves) - 1])
+                    for ner_n in sentence_ners:
+                        if subject in ner_n:  # always a 1-word subject?
+                            # print(subject, "->", ner_n, end="  ")
+                            subject = ner_n.replace(" ", "_")
+                            break
+                    Triple.append(subject)
                     Triple.append(Preposition)
 
-                    # now get NP on the right
+                    # get OBJECT NP on the right
                     closest = 0
                     currentDif = 100000
                     for y in index:
                         diff = y - PosPPTree
-                        if (diff > 0 and diff < currentDif):
+                        if (diff > 0 and diff < currentDif): # right NP
                             currentDif = diff
                             closest = y
 
                     # check if closet has an NP child, if it does work from child
-                    leafLabel = "UNKNOWN"
+                    leafLabel, subject = "UNKNOWN", "UNKNOWN"
                     loop = True
                     count = 0
 
-                    if closest>= len(Positions): closest=(len(Positions)-1) ## No NP
+                    if closest>= len(Positions):
+                        closest=(len(Positions)-1) ## No NP
                     currentNode = findPosInOrderList(Positions[closest], Positions_depths)
 
-                    while (currentNode != None) and (loop and count<10):         # Why 10? 10 attempts?
-                        # check if child is a leaf node first
+                    while (currentNode != None) and (loop and count<10):   # Why 10? 10 attempts?
                         # ClosestPosInOrderList = findPosInOrderList(Positions[closest],Positions_depths)
                         # childOfClosest = findChildNodes(Positions[closest], ClosestPosInOrderList, Positions_depths)
                         # childOfClosestTreePOS = PositionInTree(childOfClosest[0], Positions_depths)
@@ -353,12 +376,16 @@ def processDocument(text): # full document
                                 currentNode = currentNodeChild[0]
                             else:
                                 leaves = findLeavesFromNode(currentNodePOS, Positions_leaves)
-                                leafLabel = checkLabelLeaf(tree, leaves[len(leaves) - 1])
+                                subject = checkLabelLeaf(tree, leaves[len(leaves) - 1])
                                 loop = False
                                 break
                         count+=1
-
-                    Triple.append(leafLabel)
+                    for ner_n in sentence_ners:
+                        if subject in ner_n:  # always a 1-word subject?
+                            # print(subject, "->", ner_n, end=" ")
+                            subject = ner_n.replace(" ", "_")
+                            break
+                    Triple.append(subject)
                     sentence_triplesPP.append(Triple)
 
         # *********************************
@@ -366,7 +393,7 @@ def processDocument(text): # full document
         # *********************************
 
         # TODO post processing
-        x=0
+        dud=0
         sentence_triples_copy = sentence_triples.copy()
         sentence_triplesPP_copy = sentence_triplesPP.copy()
         for x in sentence_triples_copy:
@@ -376,8 +403,9 @@ def processDocument(text): # full document
                 sentence_triples.remove(x)
             elif x[0] == ',' or x[2] == ',':
                 sentence_triples.remove(x)
-            elif (not re.match(r'^\w+$', x[0]) or not re.match(r'^\w+$', x[1]) or not re.match(r'^\w+$', x[2])):
-                sentence_triples.remove(x)
+            #elif (not re.match(r'^\w+$', x[0]) or not re.match(r'^\w+$', x[1]) or not re.match(r'^\w+$', x[2])):
+            #    sentence_triples.remove(x)
+            #    print(" DEL ", x, end=" ")
 
         for x in sentence_triplesPP_copy:  # remove invalid triples
             if x[0] in illegal_concept_nodes or x[2] in illegal_concept_nodes:
@@ -386,9 +414,10 @@ def processDocument(text): # full document
                 sentence_triplesPP.remove(x)
             elif x[0] == ',' or x[2] == ',':
                 sentence_triplesPP.remove(x)
-            elif (not re.match(r'^\w+$', x[0]) or not re.match(r'^\w+$', x[1]) or not re.match(r'^\w+$', x[2])):
-                sentence_triplesPP.remove(x)
-        x = 0
+            #elif (not re.match(r'^\w+$', x[0]) or not re.match(r'^\w+$', x[1]) or not re.match(r'^\w+$', x[2])):
+            #    sentence_triplesPP.remove(x)
+            #    print(" DEL ", x, end=" ")
+        dud = 0
         for vb_triple in sentence_triples:  ## Phrasal verb composition
             for prp_triple in sentence_triplesPP:  # X vb Y followed by  X prp Y in same sentence
                 if (prp_triple[0]== vb_triple[0] and prp_triple[2]== vb_triple[2] and
@@ -401,8 +430,8 @@ def processDocument(text): # full document
                     #print(vb_triple[1]+"_"+prp_triple[1], end="")
 
         print("\n",list_of_sentences[i])
-        print("VB-based predicates: ", sentence_triples)
-        print("PP-based predicates: ", sentence_triplesPP, end="  ")
+        print("VP predicates: ", sentence_triples)
+        print("PP predicates: ", sentence_triplesPP, end="  ")
         print()
         #tree.draw()  # show display parse tree
         
@@ -411,7 +440,7 @@ def processDocument(text): # full document
     return
 
 
-def process_sentence(text):  # full document
+def process_sentence_DEPRECATED(text):  # full document
     global sentence_triples
     global sentence_triplesPP
     global set_of_raw_concepts
@@ -590,9 +619,7 @@ def process_sentence(text):  # full document
         PosOfPP = findPosOfSpecificLabel(tree, "PP", Positions_depths, Positions_leaves)
         # global sentence_triplesPP
         # sentence_triplesPP = []
-        if PosOfPP is None:
-            print("No PP found")
-        else:  # posOfPP
+        if PosOfPP != None:
             for z in PosOfPP:
                 Triple = []
                 Preposition = ""
@@ -814,14 +841,13 @@ def processAllTextFiles():
 def add_line_to_output_CSV_file(fileName):
     global document_triples
     testList = BringListDown1D(document_triples)
+    heading = [["NOUN", "VERB/PREP", "NOUN"]]
     with open(out_path + fileName+".dcorf.csv", 'w', encoding="utf8") as resultFile:
         write = csv.writer(resultFile, lineterminator='\n')
         write.writerows(heading)
         write.writerows(testList)
     resultFile.close()
     return
-
-
 
 
 def intersection(lst1, lst2):
@@ -848,11 +874,26 @@ def count_content_overlap(string_a, string_b):
 print("1) Set your java path in line 19.")
 print("2) Change the base_path variable if it is Not the current working directory.", base_path)
 print("Type   processAllTextFiles()   to generate graphs from .txt files from ", in_path)
+print()
 
-#processDocument("John drove his new car but he crashed it.")
+# processDocument("John Smyth drove his new car but he crashed it. ")
+# processDocument("John Smyth drove his new car but he crashed it. It was a bad day for Jane Doe. \
+#                Tom Sullivan was eating in Sunbury on Thames that day.")
 
+#processDocument("POLITICAL LEADERS PAST and present have paid tribute to David Trimble’s contribution to peace \
+# in Northern Ireland following his death. The 77-year-old ex-leader of the Ulster Unionist Party \
+# was one of the principal architects of the Good Friday Agreement that ended decades of conflict in \
+# the region. Trimble, who jointly won the Nobel Peace Prize along with late SDLP leader John Hume, \
+# died yesterday following an illness.")
+
+# processDocument("The strongest rain ever recorded in India shut down the financial hub of Mumbai, snapped \
+# communication lines, closed airports and forced thousands of people to sleep in their offices or walk home \
+# during the night, officials said today.")
+
+processDocument("John drove his new car but he crashed it.")
+processDocument("The fourth Wells account moving to another agency is the packaged paper-products division of Georgia-Pacific Corp., which arrived at Wells only last fall. Like Hertz and the History Channel, it is also leaving for an Omnicom-owned agency, the BBDO South unit of BBDO Worldwide. BBDO South in Atlanta, which handles corporate advertising for Georgia-Pacific, will assume additional duties for brands like Angel Soft toilet tissue and Sparkle paper towels, said Ken Haldin, a spokesman for Georgia-Pacific in Atlanta.")
 processAllTextFiles()
 
-import nltk
+#import nltk
 
 
