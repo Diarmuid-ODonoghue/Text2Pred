@@ -5,7 +5,8 @@ INPUT:
 "John drove his new car but he crashed it."
 
 OUTPUT: 
-[['John',    'drove',   'car'], 
+SUBJECT       VERB      OBJECT
+[['John',    'drove',   'car'],
  ['John_he', 'crashed', 'his_new_car_it']
 
 
