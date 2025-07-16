@@ -1,8 +1,9 @@
 # Text2Pred
-Open information extraction using the Stanford parser - using the **StanfordCoreNLP** wrapper. 
+Open information extraction using the **Stanford Parser** - through the **StanfordCoreNLP** wrapper. 
+Specifically, we use its Constituency Parser.
 
 INPUT: 
-"John drove his new car but he crashed it."
+*"John drove his new car but he crashed it."*
 
 OUTPUT:  
 |  Subject | Relation | Object |
